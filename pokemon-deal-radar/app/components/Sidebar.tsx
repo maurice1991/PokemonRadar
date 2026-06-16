@@ -45,7 +45,7 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center justify-center md:justify-start gap-2 px-4 py-3 rounded-xl font-semibold transition ${
+              className={`w-full flex items-center justify-start md:justify-start gap-2 px-4 py-3 rounded-xl font-semibold transition ${
                 activeTab === item.id
                   ? "bg-yellow-400 text-slate-950"
                   : "text-slate-300 hover:bg-slate-800"

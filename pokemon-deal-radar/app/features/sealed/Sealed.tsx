@@ -74,7 +74,7 @@ export default function Sealed() {
     }
 
     const sealedOnly = (data ?? []).filter((item: any) => item.products !== null);
-    setProducts(sealedOnly as SealedInventoryItem[]);
+    setProducts(sealedOnly as unknown as SealedInventoryItem[]);
     setLoading(false);
   }
 

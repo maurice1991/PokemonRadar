@@ -3,7 +3,9 @@ export type Deal = {
   title: string;
   image: string;
   askingPrice: number;
+  price:number;
   marketPrice: number;
+  marketValue:number;
   platform: string;
   location: string;
   postedAt: string;

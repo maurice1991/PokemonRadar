@@ -10,6 +10,8 @@ import {
   removeSealedProduct,
 } from "../../lib/sealedStorage";
 import type { PokemonSet, SealedProduct } from "../../types/pokemon";
+import { supabase } from "../../lib/supabaseClient";
+import Collection from "../collection/Collection";
 
 export default function Sealed() {
   const [products, setProducts] = useState<SealedProduct[]>([]);
@@ -248,7 +250,7 @@ async function deleteCard(
                 </div>
 
                 <button
-                  onClick={() => deleteProduct(product.id)}
+                //   onClick={() => deleteProduct(product.id)}
                   className="w-full mt-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl p-3"
                 >
                   Verwijderen

@@ -4,18 +4,30 @@ import { useEffect, useState } from "react";
 import EmptyState from "../../components/EmptyState";
 import { getPokemonSets } from "../../api/pokemonApi";
 import { formatEuro, getSetLogoUrl } from "../../lib/pokemonHelpers";
-import {
-  addSealedProduct,
-  getSealedProducts,
-  removeSealedProduct,
-} from "../../lib/sealedStorage";
-import type { PokemonSet, SealedProduct } from "../../types/pokemon";
 import { supabase } from "../../lib/supabaseClient";
-import Collection from "../collection/Collection";
+import type { PokemonSet } from "../../types/pokemon";
+
+type SealedInventoryItem = {
+  id: string;
+  quantity: number;
+  purchase_price: number;
+  products: {
+    id: string;
+    name: string;
+    set_name: string | null;
+    image_url: string | null;
+    market_price: number | null;
+    sealed_type: string | null;
+    status: string | null;
+  } | null;
+};
 
 export default function Sealed() {
-  const [products, setProducts] = useState<SealedProduct[]>([]);
+  const [products, setProducts] = useState<SealedInventoryItem[]>([]);
   const [sets, setSets] = useState<PokemonSet[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
   const [selectedSetId, setSelectedSetId] = useState("");
   const [setSearch, setSetSearch] = useState("");
   const [showSetOptions, setShowSetOptions] = useState(false);
@@ -26,52 +38,197 @@ export default function Sealed() {
   const [currentValue, setCurrentValue] = useState("");
   const [status, setStatus] = useState<"sealed" | "opened" | "sold">("sealed");
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const result = await getPokemonSets();
-        setSets(result);
-      } catch (error) {
-        console.error(error);
-      }
-
-      setProducts(getSealedProducts());
-    }
-
-    loadData();
-  }, []);
-
-
   const sortedSets = [...sets].sort((a, b) => a.name.localeCompare(b.name));
 
   const filteredSets = sortedSets.filter((set) =>
     set.name.toLowerCase().includes(setSearch.toLowerCase())
   );
 
-  function handleAddSealedProduct() {
+  async function loadSealedProducts() {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from("inventory")
+      .select(`
+        id,
+        quantity,
+        purchase_price,
+        products (
+          id,
+          name,
+          set_name,
+          image_url,
+          market_price,
+          sealed_type,
+          status
+        )
+      `)
+      .eq("products.type", "sealed")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Sealed laden mislukt:", error);
+      alert(error.message);
+      setLoading(false);
+      return;
+    }
+
+    const sealedOnly = (data ?? []).filter((item: any) => item.products !== null);
+    setProducts(sealedOnly as SealedInventoryItem[]);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const result = await getPokemonSets();
+        setSets(result);
+      } catch (error) {
+        console.error("Sets laden mislukt:", error);
+      }
+
+      await loadSealedProducts();
+    }
+
+    loadData();
+  }, []);
+
+  async function handleAddSealedProduct() {
     if (!setSearch.trim()) {
       alert("Vul een productnaam of setnaam in.");
       return;
     }
 
-    const selectedSet = sets.find((set) => set.id === selectedSetId);
+    setSaving(true);
 
-    const product: SealedProduct = {
-      id: crypto.randomUUID(),
-      setId: selectedSet?.id,
-      logo: getSetLogoUrl(selectedSet),
-      name: selectedSet?.name ?? setSearch,
-      type,
-      quantity: Number(quantity || 1),
-      purchasePrice: Number(purchasePrice || 0),
-      currentValue: Number(currentValue || 0),
-      status,
-      dateAdded: new Date().toISOString(),
-    };
+    try {
+      const selectedSet = sets.find((set) => set.id === selectedSetId);
+      const productName = selectedSet?.name ?? setSearch.trim();
+      const productType = type;
+      const qty = Math.max(1, Number(quantity || 1));
+      const purchase = Number(purchasePrice || 0);
+      const market = Number(currentValue || 0);
 
-    const updated = addSealedProduct(product);
-    setProducts(updated);
+      const { data: existingProduct, error: existingError } = await supabase
+        .from("products")
+        .select("id")
+        .eq("type", "sealed")
+        .eq("name", productName)
+        .eq("sealed_type", productType)
+        .maybeSingle();
 
+      if (existingError) {
+        console.error("Bestaand sealed product zoeken mislukt:", existingError);
+        alert(existingError.message);
+        return;
+      }
+
+      if (existingProduct) {
+        const { data: existingInventory, error: inventoryFindError } =
+          await supabase
+            .from("inventory")
+            .select("id, quantity")
+            .eq("product_id", existingProduct.id)
+            .maybeSingle();
+
+        if (inventoryFindError) {
+          console.error("Inventory zoeken mislukt:", inventoryFindError);
+          alert(inventoryFindError.message);
+          return;
+        }
+
+        if (existingInventory) {
+          const { error: updateError } = await supabase
+            .from("inventory")
+            .update({
+              quantity: Number(existingInventory.quantity ?? 0) + qty,
+              purchase_price: purchase,
+            })
+            .eq("id", existingInventory.id);
+
+          if (updateError) {
+            console.error("Aantal verhogen mislukt:", updateError);
+            alert(updateError.message);
+            return;
+          }
+
+          await supabase
+            .from("products")
+            .update({
+              market_price: market,
+              status,
+              image_url: getSetLogoUrl(selectedSet),
+            })
+            .eq("id", existingProduct.id);
+
+          alert(`${productName} aantal verhoogd!`);
+          resetForm();
+          await loadSealedProducts();
+          return;
+        }
+      }
+
+      const { data: product, error: productError } = await supabase
+        .from("products")
+        .insert({
+          type: "sealed",
+          name: productName,
+          set_name: productName,
+          set_id: selectedSet?.id,
+          image_url: getSetLogoUrl(selectedSet),
+          market_price: market,
+          sealed_type: productType,
+          status,
+          source: "manual",
+        })
+        .select("id")
+        .single();
+
+      if (productError) {
+        console.error("Sealed product opslaan mislukt:", productError);
+        alert(productError.message);
+        return;
+      }
+
+      const { error: inventoryError } = await supabase.from("inventory").insert({
+        product_id: product.id,
+        quantity: qty,
+        purchase_price: purchase,
+      });
+
+      if (inventoryError) {
+        console.error("Inventory opslaan mislukt:", inventoryError);
+        alert(inventoryError.message);
+        return;
+      }
+
+      alert(`${productName} toegevoegd!`);
+      resetForm();
+      await loadSealedProducts();
+    } catch (error) {
+      console.error("Onverwachte fout:", error);
+      alert("Er ging iets mis bij opslaan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteProduct(inventoryId: string, productId: string) {
+    const { error } = await supabase
+      .from("products")
+      .delete()
+      .eq("id", productId);
+
+    if (error) {
+      console.error("Verwijderen mislukt:", error);
+      alert(error.message);
+      return;
+    }
+
+    await loadSealedProducts();
+  }
+
+  function resetForm() {
     setSelectedSetId("");
     setSetSearch("");
     setType("ETB");
@@ -81,38 +238,9 @@ export default function Sealed() {
     setStatus("sealed");
   }
 
-async function deleteCard(
-  inventoryId: string,
-  productId: string
-) {
-  const { error: inventoryError } = await supabase
-    .from("inventory")
-    .delete()
-    .eq("id", inventoryId);
-
-  if (inventoryError) {
-    console.error(inventoryError);
-    alert(inventoryError.message);
-    return;
-  }
-
-  const { error: productError } = await supabase
-    .from("products")
-    .delete()
-    .eq("id", productId);
-
-  if (productError) {
-    console.error(productError);
-    alert(productError.message);
-    return;
-  }
-
-  Collection();
-}
-
   return (
     <>
-      <h2 className="text-4xl font-bold mb-2">Sealed collectie</h2>
+      <h2 className="text-3xl md:text-4xl font-bold mb-2">Sealed collectie</h2>
       <p className="text-slate-400 mb-8">
         Voeg ETB’s, booster boxes, booster bundles en Japanse boxen toe.
       </p>
@@ -120,7 +248,7 @@ async function deleteCard(
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-8">
         <h3 className="text-xl font-bold mb-4">Sealed product toevoegen</h3>
 
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="relative">
             <input
               value={setSearch}
@@ -148,7 +276,11 @@ async function deleteCard(
                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-800 text-slate-200 text-left"
                   >
                     {getSetLogoUrl(set) && (
-                      <img src={getSetLogoUrl(set)} alt={set.name} className="h-8 w-12 object-contain" />
+                      <img
+                        src={getSetLogoUrl(set)}
+                        alt={set.name}
+                        className="h-8 w-12 object-contain"
+                      />
                     )}
                     <span>{set.name}</span>
                   </button>
@@ -201,7 +333,9 @@ async function deleteCard(
 
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as "sealed" | "opened" | "sold")}
+            onChange={(e) =>
+              setStatus(e.target.value as "sealed" | "opened" | "sold")
+            }
             className="p-4 rounded-xl bg-slate-950 border border-slate-700 outline-none focus:border-yellow-400"
           >
             <option value="sealed">Sealed</option>
@@ -212,45 +346,68 @@ async function deleteCard(
 
         <button
           onClick={handleAddSealedProduct}
-          className="mt-4 bg-yellow-400 text-slate-950 font-bold rounded-xl px-6 py-4"
+          disabled={saving}
+          className="mt-4 bg-yellow-400 text-slate-950 font-bold rounded-xl px-6 py-4 disabled:opacity-50"
         >
-          Toevoegen
+          {saving ? "Opslaan..." : "Toevoegen"}
         </button>
       </div>
 
-      {products.length === 0 && <EmptyState text="Nog geen sealed producten toegevoegd." />}
+      {loading && <EmptyState text="Sealed producten laden..." />}
 
-      {products.length > 0 && (
-        <div className="grid md:grid-cols-3 gap-5">
-          {products.map((product) => {
-            const totalPurchase = Number(product.purchasePrice ?? 0) * Number(product.quantity ?? 1);
-            const totalValue = Number(product.currentValue ?? 0) * Number(product.quantity ?? 1);
+      {!loading && products.length === 0 && (
+        <EmptyState text="Nog geen sealed producten toegevoegd." />
+      )}
+
+      {!loading && products.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+          {products.map((item) => {
+            const product = item.products;
+            if (!product) return null;
+
+            const totalPurchase =
+              Number(item.purchase_price ?? 0) * Number(item.quantity ?? 1);
+            const totalValue =
+              Number(product.market_price ?? 0) * Number(item.quantity ?? 1);
             const profit = totalValue - totalPurchase;
 
             return (
-              <div key={product.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                {product.logo && (
-                  <img src={product.logo} alt={product.name} className="h-20 object-contain mb-4" />
+              <div
+                key={item.id}
+                className="bg-slate-900 border border-slate-800 rounded-2xl p-5"
+              >
+                {product.image_url && (
+                  <img
+                    src={product.image_url}
+                    alt={product.name}
+                    className="h-20 object-contain mb-4"
+                  />
                 )}
 
                 <h3 className="font-bold text-xl mb-1">{product.name}</h3>
 
                 <p className="text-sm text-slate-400 mb-3">
-                  {product.type} · {product.status}
+                  {product.sealed_type} · {product.status}
                 </p>
 
                 <div className="space-y-1 text-sm">
-                  <p>Aantal: {product.quantity}</p>
-                  <p>Inkoop p/st: {formatEuro(product.purchasePrice)}</p>
-                  <p>Waarde p/st: {formatEuro(product.currentValue)}</p>
-                  <p className="text-yellow-400 font-bold">Totale waarde: {formatEuro(totalValue)}</p>
-                  <p className={`font-bold ${profit >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  <p>Aantal: {item.quantity}</p>
+                  <p>Inkoop p/st: {formatEuro(Number(item.purchase_price ?? 0))}</p>
+                  <p>Waarde p/st: {formatEuro(Number(product.market_price ?? 0))}</p>
+                  <p className="text-yellow-400 font-bold">
+                    Totale waarde: {formatEuro(totalValue)}
+                  </p>
+                  <p
+                    className={`font-bold ${
+                      profit >= 0 ? "text-green-400" : "text-red-400"
+                    }`}
+                  >
                     Winst/verlies: {formatEuro(profit)}
                   </p>
                 </div>
 
                 <button
-                //   onClick={() => deleteProduct(product.id)}
+                  onClick={() => deleteProduct(item.id, product.id)}
                   className="w-full mt-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl p-3"
                 >
                   Verwijderen

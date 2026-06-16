@@ -14,10 +14,10 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="flex">
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <div className="flex flex-col md:flex-row">
+         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-        <section className="flex-1 p-8">
+          <section className="flex-1 p-4 md:p-8">
           {activeTab === "overview" && <Overview />}
           {activeTab === "collection" && <Collection />}
           {activeTab === "add-card" && <AddCard />}
